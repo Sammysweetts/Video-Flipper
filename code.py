@@ -11,6 +11,31 @@ st.set_page_config(
     layout="wide"
 )
 
+# Function to find ffmpeg executable
+def get_ffmpeg_path():
+    # Try system path first
+    try:
+        subprocess.run(["ffmpeg", "-version"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        return "ffmpeg"
+    except:
+        # Try specific paths in Streamlit Cloud
+        possible_paths = [
+            "/usr/bin/ffmpeg",
+            "/usr/local/bin/ffmpeg",
+            "/opt/homebrew/bin/ffmpeg"
+        ]
+        for path in possible_paths:
+            if os.path.exists(path):
+                return path
+        st.error("FFmpeg not found. Please ensure it's installed.")
+        st.stop()
+
+# Get FFmpeg path
+FFMPEG_PATH = get_ffmpeg_path()
+
+# Rest of your app code remains the same, but update the FFmpeg command:
+# In your flip_video function, change 'ffmpeg' to FFMPEG_PATH
+
 # App title and description
 st.title("🔄 Video Flipper")
 st.markdown("""
@@ -62,9 +87,9 @@ if uploaded_file is not None:
                 
                 flip_filter_str = ",".join(flip_filters)
 
-                # FFmpeg command
+                # FFmpeg command - using the detected FFMPEG_PATH
                 cmd = [
-                    'ffmpeg', '-y',
+                    FFMPEG_PATH, '-y',
                     '-i', input_path,
                     '-vf', flip_filter_str,
                     '-c:v', 'libx264',
