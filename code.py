@@ -1,14 +1,26 @@
 import streamlit as st
-import subprocess
-import tempfile
 import os
+import time
+import subprocess
+from base64 import b64encode # For displaying video in web browser
+from moviepy.editor import VideoFileClip # For getting video duration
+import tempfile # For handling temporary files safely
 
-# --- Core FFmpeg Function (adapted from your script) ---
-def flip_video(input_path, output_path, flip_horizontal, flip_vertical):
-    """
-    Flips a video using FFmpeg.
-    Returns the subprocess result object.
-    """
+# --- Configuration ---
+FFMPEG_BINARY = "ffmpeg" # Assumes ffmpeg is available in the environment (e.g., via apt install in Docker/Streamlit sharing)
+
+# --- Streamlit Page Setup ---
+st.set_page_config(
+    page_title="Video Flipper",
+    page_icon="🎬",
+    layout="centered"
+)
+
+st.title("🎬 Video Flipper")
+st.write("Upload a video, choose your flip options, and download the flipped result!")
+
+# --- Helper Function: Flip Video ---
+def flip_video_processor(input_filepath, output_filepath, flip_horizontal, flip_vertical):
     flip_filters = []
     if flip_horizontal:
         flip_filters.append('hflip')
@@ -16,93 +28,131 @@ def flip_video(input_path, output_path, flip_horizontal, flip_vertical):
         flip_filters.append('vflip')
 
     if not flip_filters:
-        # This case is handled in the UI, but good to have for safety
-        raise ValueError("At least one flip direction must be selected.")
-    
+        st.error("You must enable at least one flip direction.")
+        return False # Indicate failure
+
     flip_filter_str = ",".join(flip_filters)
 
-    # Command for FFmpeg
-    # -y: overwrite output file if it exists
-    # -i: input file
-    # -vf: video filter graph
-    # -c:v libx264: H.264 video codec (great compatibility)
-    # -crf 17: Constant Rate Factor for quality (17 is visually lossless)
-    # -preset fast: encoding speed vs. compression ratio
-    # -c:a aac: AAC audio codec (great compatibility)
-    # -b:a 192k: Audio bitrate
+    # Visually lossless, browser-compatible encoding
     cmd = [
-        'ffmpeg', '-y',
-        '-i', input_path,
+        FFMPEG_BINARY, '-y',
+        '-i', input_filepath,
         '-vf', flip_filter_str,
         '-c:v', 'libx264',
-        '-crf', '17',
-        '-preset', 'fast',
+        '-crf', '17', # Constant Rate Factor (0-51, lower is better quality)
+        '-preset', 'fast', # Encoding speed vs. compression efficiency
         '-c:a', 'aac',
-        '-b:a', '192k',
-        output_path
+        '-b:a', '192k', # Audio bitrate
+        output_filepath
     ]
 
-    # Run the command
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    return result
+    st.info(f"Processing video with FFmpeg...")
+    progress_bar = st.progress(0)
+    status_text = st.empty()
 
-# --- Streamlit User Interface ---
+    # Use subprocess.Popen for real-time output parsing to update progress
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
-st.set_page_config(layout="centered", page_title="Video Flipper", page_icon="🔄")
+    # Get video duration for progress calculation (using moviepy)
+    try:
+        clip = VideoFileClip(input_filepath)
+        total_duration = clip.duration
+        clip.close()
+    except Exception as e:
+        st.warning(f"Could not determine video duration for progress: {e}. Progress bar will not be precise.")
+        total_duration = None
 
-st.title("🔄 Video Flipper")
-st.markdown("Upload a video and choose how you want to flip it. Powered by `FFmpeg` and Streamlit.")
+    stderr_output = []
+    for line in iter(process.stderr.readline, ''):
+        stderr_output.append(line)
+        # Attempt to parse time from FFmpeg's stderr for progress
+        if total_duration and "time=" in line:
+            try:
+                # Example: time=00:00:15.23
+                time_str = line.split("time=")[1].split(" ")[0]
+                h, m, s = map(float, time_str.split(':'))
+                current_time = h * 3600 + m * 60 + s
+                progress = min(1.0, current_time / total_duration)
+                progress_bar.progress(progress)
+                status_text.text(f"Processing... {int(progress*100)}%")
+            except Exception:
+                pass # Ignore parsing errors
 
-# Sidebar for options
-with st.sidebar:
-    st.header("⚙️ Flip Options")
-    uploaded_file = st.file_uploader(
-        "Choose a video file", 
-        type=["mp4", "mov", "avi", "mkv"]
-    )
-    
-    flip_horizontal = st.checkbox("Flip Horizontally (left-to-right)", value=True)
-    flip_vertical = st.checkbox("Flip Vertically (upside-down)")
+    # Ensure progress bar reaches 100% at the end
+    progress_bar.progress(1.0)
+    status_text.text("Processing complete.")
 
-    process_button = st.button("Process Video", type="primary")
+    process.wait() # Wait for the process to finish
 
-# Main content area
-if process_button and uploaded_file is not None:
+    if process.returncode != 0:
+        st.error("⚠️ FFmpeg Error:")
+        st.code("".join(stderr_output)) # Display full stderr for debugging
+        return False
+    else:
+        st.success("✅ Video processed successfully.")
+        return True
+
+# --- File Uploader ---
+uploaded_file = st.file_uploader("Choose a video file", type=["mp4", "mov", "avi", "mkv"])
+
+if uploaded_file is not None:
+    st.video(uploaded_file, format='video/mp4', start_time=0)
+
+    # --- Flip Options ---
+    col1, col2 = st.columns(2)
+    with col1:
+        flip_horizontal = st.checkbox("Flip Horizontally (Left-Right)", value=True)
+    with col2:
+        flip_vertical = st.checkbox("Flip Vertically (Up-Down)", value=False)
+
     if not flip_horizontal and not flip_vertical:
         st.warning("Please select at least one flip direction.")
     else:
-        with st.spinner('Processing your video... This might take a moment.'):
-            # Use a temporary directory to handle file I/O
-            with tempfile.TemporaryDirectory() as temp_dir:
-                input_path = os.path.join(temp_dir, uploaded_file.name)
-                output_path = os.path.join(temp_dir, f"flipped_{uploaded_file.name}")
+        # --- Process Button ---
+        if st.button("Flip Video"):
+            with st.spinner("Uploading and processing your video... This might take a moment."):
+                # Create temporary files for input and output
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as input_temp_file:
+                    input_temp_file.write(uploaded_file.getvalue())
+                    input_filepath = input_temp_file.name
 
-                # Save the uploaded file to the temporary directory
-                with open(input_path, "wb") as f:
-                    f.write(uploaded_file.getvalue())
+                output_filepath = os.path.join(tempfile.gettempdir(), "flipped_output.mp4")
 
-                # Run the FFmpeg process
-                result = flip_video(input_path, output_path, flip_horizontal, flip_vertical)
+                try:
+                    if flip_video_processor(input_filepath, output_filepath, flip_horizontal, flip_vertical):
+                        st.subheader("Flipped Video")
 
-                # Check if FFmpeg ran successfully
-                if result.returncode == 0:
-                    st.success("✅ Video processed successfully!")
+                        # Display video inline
+                        # This works well for small/medium videos. For very large videos, Streamlit's st.video()
+                        # with a file path (once it supports local paths better) or direct download is preferred.
+                        try:
+                            # Read the processed video file
+                            with open(output_filepath, 'rb') as f:
+                                processed_video_bytes = f.read()
 
-                    # Display the video
-                    st.video(output_path)
-                    
-                    # Provide a download button
-                    with open(output_path, "rb") as f:
-                        st.download_button(
-                            label="📥 Download Flipped Video",
-                            data=f,
-                            file_name=f"flipped_{uploaded_file.name}",
-                            mime="video/mp4"
-                        )
-                else:
-                    st.error("⚠️ An error occurred during video processing.")
-                    with st.expander("Click to see FFmpeg error log"):
-                        st.code(result.stderr)
-                        
-elif process_button and uploaded_file is None:
-    st.warning("Please upload a video file first.")
+                            # Encode to base64 for embedding in HTML (for browser display)
+                            video_base64 = b64encode(processed_video_bytes).decode()
+                            video_html = f"""
+                            <video width=640 controls autoplay loop>
+                                <source src="data:video/mp4;base64,{video_base64}" type="video/mp4">
+                                Your browser does not support the video tag.
+                            </video>
+                            """
+                            st.components.v1.html(video_html, height=480) # Adjust height as needed
+                        except Exception as e:
+                            st.error(f"Error displaying video inline: {e}. You can still download it.")
+
+                        # Provide download link
+                        with open(output_filepath, "rb") as file:
+                            st.download_button(
+                                label="Download Flipped Video",
+                                data=file,
+                                file_name="flipped_video.mp4",
+                                mime="video/mp4"
+                            )
+                finally:
+                    # Clean up temporary files
+                    if os.path.exists(input_filepath):
+                        os.remove(input_filepath)
+                    if os.path.exists(output_filepath):
+                        os.remove(output_filepath)
