@@ -4,7 +4,7 @@ import os
 import ffmpeg
 
 # Title
-st.title("🎬 Video Flipper (Lossless Flip using FFmpeg)")
+st.title("🎬 Free Video Flipper")
 
 # Instructions
 st.markdown("""
