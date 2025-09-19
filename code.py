@@ -2,93 +2,129 @@ import os
 import tempfile
 import streamlit as st
 import subprocess
+import shutil # Import shutil for directory cleanup
 
-# Set page config
+# --- Page Configuration ---
 st.set_page_config(
     page_title="Video Flipper",
     page_icon="🔄",
     layout="wide"
 )
 
-# App title and description
+# --- App Title and Description ---
 st.title("🔄 Video Flipper")
 st.markdown("""
 Upload a video and flip it horizontally or vertically. The processed video will maintain high quality and be available for download.
+This app uses FFmpeg for high-quality video processing.
 """)
 
-# Sidebar controls (only flip options)
+# --- Initialize Session State ---
+# This helps to keep the app state persistent across reruns
+if 'processed' not in st.session_state:
+    st.session_state.processed = False
+if 'video_bytes' not in st.session_state:
+    st.session_state.video_bytes = None
+if 'file_name' not in st.session_state:
+    st.session_state.file_name = ""
+
+# --- Sidebar Controls ---
 with st.sidebar:
     st.header("Flip Options")
     flip_horizontal = st.checkbox("Flip Horizontal", value=True)
     flip_vertical = st.checkbox("Flip Vertical", value=False)
+    st.info("Note: Uploading a new file will reset the state.")
 
-# File uploader
-uploaded_file = st.file_uploader("Upload a video file", type=["mp4", "mov", "avi", "mkv"])
 
+# --- File Uploader ---
+# The 'on_change' callback will reset the state when a new file is uploaded
+def reset_state():
+    st.session_state.processed = False
+    st.session_state.video_bytes = None
+    st.session_state.file_name = ""
+
+uploaded_file = st.file_uploader(
+    "Upload a video file",
+    type=["mp4", "mov", "avi", "mkv"],
+    on_change=reset_state
+)
+
+# --- Main Logic ---
 if uploaded_file is not None:
-    # Create temp directory
-    temp_dir = tempfile.mkdtemp()
-    input_path = os.path.join(temp_dir, uploaded_file.name)
-    output_path = os.path.join(temp_dir, "flipped_" + uploaded_file.name)
     
-    # Save uploaded file to temp
-    with open(input_path, "wb") as f:
-        f.write(uploaded_file.getbuffer())
-    
-    # Process video
+    # Process video when the button is clicked
     if st.button("Flip Video"):
-        with st.spinner("Processing video (this may take a while for large files)..."):
+        # Ensure at least one flip direction is selected
+        if not flip_horizontal and not flip_vertical:
+            st.error("Please select at least one flip direction in the sidebar.")
+        else:
+            temp_dir = None # Initialize temp_dir to ensure it's available in the finally block
             try:
-                # Build flip filters
-                flip_filters = []
-                if flip_horizontal:
-                    flip_filters.append('hflip')
-                if flip_vertical:
-                    flip_filters.append('vflip')
+                # Create a temporary directory to store files
+                temp_dir = tempfile.mkdtemp()
+                input_path = os.path.join(temp_dir, uploaded_file.name)
+                output_path = os.path.join(temp_dir, "flipped_" + uploaded_file.name)
 
-                if not flip_filters:
-                    st.error("Please select at least one flip direction.")
-                    st.stop()
-                
-                flip_filter_str = ",".join(flip_filters)
+                # Save uploaded file to the temporary directory
+                with open(input_path, "wb") as f:
+                    f.write(uploaded_file.getbuffer())
 
-                # FFmpeg command with optimal quality settings
-                cmd = [
-                    'ffmpeg', '-y',
-                    '-i', input_path,
-                    '-vf', flip_filter_str,
-                    '-c:v', 'libx264',       # H.264 codec
-                    '-crf', '18',            # High quality (range is 0-51, lower is better)
-                    '-preset', 'slow',       # Better compression (slower encoding)
-                    '-tune', 'film',         # Optimize for high quality video
-                    '-c:a', 'aac',           # Audio codec
-                    '-b:a', '192k',          # Audio bitrate
-                    '-movflags', '+faststart', # Enable streaming
-                    output_path
-                ]
+                with st.spinner("Processing video (this may take a while for large files)..."):
+                    # Build the FFmpeg filter string
+                    flip_filters = []
+                    if flip_horizontal:
+                        flip_filters.append('hflip')
+                    if flip_vertical:
+                        flip_filters.append('vflip')
+                    flip_filter_str = ",".join(flip_filters)
 
-                # Run FFmpeg
-                result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                    # FFmpeg command with high-quality settings
+                    cmd = [
+                        'ffmpeg', '-y',
+                        '-i', input_path,
+                        '-vf', flip_filter_str,
+                        '-c:v', 'libx264',       # H.264 codec
+                        '-crf', '18',            # High quality (range is 0-51, lower is better)
+                        '-preset', 'slow',       # Better compression (slower encoding)
+                        '-c:a', 'copy',          # Copy audio stream without re-encoding
+                        '-movflags', '+faststart', # Enable streaming
+                        output_path
+                    ]
 
-                if result.returncode != 0:
-                    st.error("FFmpeg Error:")
-                    st.code(result.stderr)
-                else:
-                    st.success("Video processed successfully with high quality settings!")
-                    
-                    # Display the processed video
-                    with open(output_path, "rb") as f:
-                        video_bytes = f.read()
-                    
-                    st.video(video_bytes)
-                    
-                    # Download button
-                    st.download_button(
-                        label="Download Flipped Video",
-                        data=video_bytes,
-                        file_name="flipped_" + uploaded_file.name,
-                        mime="video/mp4"
-                    )
-                    
+                    # Run FFmpeg command
+                    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+                    if result.returncode != 0:
+                        st.error("FFmpeg Error:")
+                        st.code(result.stderr)
+                    else:
+                        st.success("Video processed successfully!")
+                        
+                        # Read the processed video file into memory
+                        with open(output_path, "rb") as f:
+                            video_bytes = f.read()
+                        
+                        # Store results in session state
+                        st.session_state.processed = True
+                        st.session_state.video_bytes = video_bytes
+                        st.session_state.file_name = "flipped_" + uploaded_file.name
+
             except Exception as e:
                 st.error(f"An error occurred: {str(e)}")
+            finally:
+                # **Crucial Cleanup Step**
+                # Remove the temporary directory and all its contents
+                if temp_dir and os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir)
+
+    # --- Display Results from Session State ---
+    # This block runs if processing was successful in a previous run
+    if st.session_state.processed and st.session_state.video_bytes:
+        st.subheader("Flipped Video")
+        st.video(st.session_state.video_bytes)
+        
+        st.download_button(
+            label="Download Flipped Video",
+            data=st.session_state.video_bytes,
+            file_name=st.session_state.file_name,
+            mime="video/mp4"
+        )
