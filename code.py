@@ -2,7 +2,6 @@ import os
 import tempfile
 import streamlit as st
 import subprocess
-from base64 import b64encode
 
 # Set page config
 st.set_page_config(
@@ -11,51 +10,17 @@ st.set_page_config(
     layout="wide"
 )
 
-# Function to find ffmpeg executable
-def get_ffmpeg_path():
-    # Try system path first
-    try:
-        subprocess.run(["ffmpeg", "-version"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        return "ffmpeg"
-    except:
-        # Try specific paths in Streamlit Cloud
-        possible_paths = [
-            "/usr/bin/ffmpeg",
-            "/usr/local/bin/ffmpeg",
-            "/opt/homebrew/bin/ffmpeg"
-        ]
-        for path in possible_paths:
-            if os.path.exists(path):
-                return path
-        st.error("FFmpeg not found. Please ensure it's installed.")
-        st.stop()
-
-# Get FFmpeg path
-FFMPEG_PATH = get_ffmpeg_path()
-
-# Rest of your app code remains the same, but update the FFmpeg command:
-# In your flip_video function, change 'ffmpeg' to FFMPEG_PATH
-
 # App title and description
 st.title("🔄 Video Flipper")
 st.markdown("""
-Upload a video and flip it horizontally or vertically. The processed video will be available for download.
+Upload a video and flip it horizontally or vertically. The processed video will maintain high quality and be available for download.
 """)
 
-# Sidebar controls
+# Sidebar controls (only flip options)
 with st.sidebar:
     st.header("Flip Options")
     flip_horizontal = st.checkbox("Flip Horizontal", value=True)
     flip_vertical = st.checkbox("Flip Vertical", value=False)
-    
-    st.markdown("---")
-    st.markdown("### FFmpeg Settings")
-    crf = st.slider("Quality (CRF)", 0, 51, 17, 
-                   help="Lower values = better quality (17-28 is recommended range)")
-    preset = st.selectbox("Encoding Speed", 
-                         ["ultrafast", "superfast", "veryfast", "faster", "fast", "medium"], 
-                         index=4,
-                         help="Faster encoding = larger file size")
 
 # File uploader
 uploaded_file = st.file_uploader("Upload a video file", type=["mp4", "mov", "avi", "mkv"])
@@ -72,7 +37,7 @@ if uploaded_file is not None:
     
     # Process video
     if st.button("Flip Video"):
-        with st.spinner("Processing video..."):
+        with st.spinner("Processing video (this may take a while for large files)..."):
             try:
                 # Build flip filters
                 flip_filters = []
@@ -87,16 +52,18 @@ if uploaded_file is not None:
                 
                 flip_filter_str = ",".join(flip_filters)
 
-                # FFmpeg command - using the detected FFMPEG_PATH
+                # FFmpeg command with optimal quality settings
                 cmd = [
-                    FFMPEG_PATH, '-y',
+                    'ffmpeg', '-y',
                     '-i', input_path,
                     '-vf', flip_filter_str,
-                    '-c:v', 'libx264',
-                    '-crf', str(crf),
-                    '-preset', preset,
-                    '-c:a', 'aac',
-                    '-b:a', '192k',
+                    '-c:v', 'libx264',       # H.264 codec
+                    '-crf', '18',            # High quality (range is 0-51, lower is better)
+                    '-preset', 'slow',       # Better compression (slower encoding)
+                    '-tune', 'film',         # Optimize for high quality video
+                    '-c:a', 'aac',           # Audio codec
+                    '-b:a', '192k',          # Audio bitrate
+                    '-movflags', '+faststart', # Enable streaming
                     output_path
                 ]
 
@@ -107,7 +74,7 @@ if uploaded_file is not None:
                     st.error("FFmpeg Error:")
                     st.code(result.stderr)
                 else:
-                    st.success("Video processed successfully!")
+                    st.success("Video processed successfully with high quality settings!")
                     
                     # Display the processed video
                     with open(output_path, "rb") as f:
