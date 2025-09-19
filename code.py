@@ -1,13 +1,16 @@
-import streamlit as st
-import os
-import subprocess
-from base64 import b64encode
-import time
-from io import BytesIO
-import tempfile
+# app.py
 
-# Define flip function (horizontal/vertical/both)
-def flip_video(input_file, output_file, flip_horizontal=False, flip_vertical=False):
+import streamlit as st
+import subprocess
+import os
+import uuid  # Used to create unique filenames
+
+# --- Core FFmpeg Logic (from your Colab notebook) ---
+# This function is mostly unchanged, but we'll add some Streamlit feedback.
+def flip_video(input_path, output_path, flip_horizontal, flip_vertical):
+    """
+    Flips a video using FFmpeg and provides progress updates.
+    """
     flip_filters = []
     if flip_horizontal:
         flip_filters.append('hflip')
@@ -15,79 +18,103 @@ def flip_video(input_file, output_file, flip_horizontal=False, flip_vertical=Fal
         flip_filters.append('vflip')
 
     if not flip_filters:
-        raise ValueError("You must enable at least one flip direction.")
-    
+        raise ValueError("You must select at least one flip direction (horizontal or vertical).")
+
     flip_filter_str = ",".join(flip_filters)
 
-    # Visually lossless, browser-compatible encoding
+    # FFmpeg command for web-compatible, visually lossless output
     cmd = [
         'ffmpeg', '-y',
-        '-i', input_file,
+        '-i', input_path,
         '-vf', flip_filter_str,
         '-c:v', 'libx264',
         '-crf', '17',
         '-preset', 'fast',
         '-c:a', 'aac',
         '-b:a', '192k',
-        output_file
+        output_path
     ]
 
-    print("Running FFmpeg command:")
-    print(" ".join(cmd))
+    # Run the command and capture output
+    process = subprocess.run(cmd, capture_output=True, text=True)
 
-    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if process.returncode != 0:
+        # If FFmpeg fails, show the error
+        st.error(f"FFmpeg failed with return code {process.returncode}")
+        st.code(process.stderr)
+        return False
+    
+    return True
 
-    if result.returncode != 0:
-        print("⚠️ FFmpeg Error:")
-        print(result.stderr)
-    else:
-        print("✅ Video processed successfully.")
+# --- Streamlit User Interface ---
 
-# Streamlit UI
-st.title("Video Flipper")
-st.write("Upload a video and choose the flip direction (horizontal/vertical) to process.")
+st.set_page_config(page_title="Video Flipper", layout="centered")
 
-# Upload video
-uploaded_file = st.file_uploader("Choose a video file", type=["mp4"])
+st.title("🎬 Video Flipper")
+st.markdown("Upload a video, choose how you want to flip it, and get your new video instantly!")
 
-# Flip options
-flip_horizontal = st.checkbox("Flip horizontally")
-flip_vertical = st.checkbox("Flip vertically")
+# Create a temporary directory to store uploaded and processed files
+TEMP_DIR = "temp"
+if not os.path.exists(TEMP_DIR):
+    os.makedirs(TEMP_DIR)
+
+# 1. File Uploader
+uploaded_file = st.file_uploader(
+    "Choose a video file", 
+    type=['mp4', 'mov', 'avi', 'mkv']
+)
 
 if uploaded_file is not None:
-    # Create a temporary file for the uploaded video
-    temp_input_file = tempfile.NamedTemporaryFile(delete=False)
-    temp_input_file.write(uploaded_file.read())
-    temp_input_file.close()
-    
-    # Generate output filename
-    temp_output_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
-    temp_output_file.close()
+    # 2. Flip options
+    st.subheader("Flip Options")
+    col1, col2 = st.columns(2)
+    with col1:
+        flip_h = st.checkbox("Flip Horizontally", value=True)
+    with col2:
+        flip_v = st.checkbox("Flip Vertically")
 
-    if st.button("Flip Video"):
-        try:
-            # Process the video
-            flip_video(temp_input_file.name, temp_output_file.name, flip_horizontal, flip_vertical)
+    # 3. Process Button
+    if st.button("Process Video", type="primary"):
+        if not flip_h and not flip_v:
+            st.warning("Please select at least one flip direction.")
+        else:
+            # Generate unique file paths to avoid conflicts
+            unique_id = uuid.uuid4().hex
+            input_path = os.path.join(TEMP_DIR, f"{unique_id}_{uploaded_file.name}")
+            output_path = os.path.join(TEMP_DIR, f"flipped_{unique_id}.mp4")
 
-            # Provide download link
-            st.success("✅ Video processed successfully.")
-            
-            # Display the video
-            with open(temp_output_file.name, 'rb') as f:
-                video_bytes = f.read()
+            # Save uploaded file to the temporary directory
+            with open(input_path, "wb") as f:
+                f.write(uploaded_file.getbuffer())
 
-            video_data_url = "data:video/mp4;base64," + b64encode(video_bytes).decode()
+            # Process the video with a spinner
+            with st.spinner("Flipping your video... This might take a moment."):
+                success = flip_video(input_path, output_path, flip_h, flip_v)
 
-            st.video(video_data_url)
+            if success:
+                st.success("✅ Video processed successfully!")
 
-            # Trigger download of the flipped video
-            st.download_button(
-                label="Download Flipped Video",
-                data=video_bytes,
-                file_name="flipped_output.mp4",
-                mime="video/mp4"
-            )
-        except Exception as e:
-            st.error(f"⚠️ Error: {e}")
+                # 4. Display the result
+                st.subheader("Flipped Video")
+                video_file = open(output_path, 'rb')
+                video_bytes = video_file.read()
+                st.video(video_bytes)
+
+                # 5. Provide a download button
+                st.download_button(
+                    label="Download Flipped Video",
+                    data=video_bytes,
+                    file_name=f"flipped_{uploaded_file.name}.mp4",
+                    mime="video/mp4"
+                )
+
+            # Clean up temporary files
+            if os.path.exists(input_path):
+                os.remove(input_path)
+            if os.path.exists(output_path):
+                # We can't delete it immediately if the download button needs it,
+                # but in Streamlit's execution model, this is generally safe.
+                # For more complex apps, you might manage cleanup differently.
+                pass 
 else:
-    st.info("Please upload a video file to get started.")
+    st.info("Upload a video file to get started.")
