@@ -6,40 +6,38 @@ import shutil
 
 # --- Page Configuration ---
 st.set_page_config(
-    page_title="Video Flipper 🎬",
-    page_icon="🔄",
-    layout="wide"
+    page_title="🔄 Video Flipper",
+    page_icon="🎬",
+    layout="centered"
 )
 
-# --- Custom Styles ---
+# --- CSS Styling for Stylish Layout ---
 st.markdown("""
-    <style>
-    .title {
-        text-align: center;
-        font-size: 40px;
+<style>
+    .main {
+        background-color: #f9fafc;
+    }
+    .stButton>button {
+        color: white;
+        background: linear-gradient(90deg, #0066ff, #00ccff);
+        font-weight: 600;
+        border: none;
+        border-radius: 7px;
+        padding: 0.5em 1.2em;
+    }
+    .stDownloadButton>button {
+        background-color: #10b981;
+        color: white;
         font-weight: bold;
+        border-radius: 7px;
     }
-    .description {
-        text-align: center;
-        font-size: 18px;
-        color: #4f4f4f;
+    .stProgress div div div {
+        background-color: #10b981 !important;
     }
-    .section-title {
-        font-size: 22px;
-        margin-top: 30px;
-        font-weight: bold;
-        color: #3366cc;
-    }
-    </style>
+</style>
 """, unsafe_allow_html=True)
 
-# --- App Title and Description ---
-st.markdown('<div class="title">🔄 Video Flipper</div>', unsafe_allow_html=True)
-st.markdown('<div class="description">Flip your videos horizontally or vertically with ease!</div>', unsafe_allow_html=True)
-
-st.write("---")
-
-# --- Initialize Session State ---
+# --- Session State Initialization ---
 if 'processed' not in st.session_state:
     st.session_state.processed = False
 if 'video_bytes' not in st.session_state:
@@ -47,35 +45,39 @@ if 'video_bytes' not in st.session_state:
 if 'file_name' not in st.session_state:
     st.session_state.file_name = ""
 
+# --- Callback to Reset Session State ---
 def reset_state():
     st.session_state.processed = False
     st.session_state.video_bytes = None
     st.session_state.file_name = ""
 
-# --- UI Layout ---
-with st.expander("📁 Upload & Options", expanded=True):
-    tab1, tab2 = st.tabs(["⚙️ Flip Options", "📤 Upload Video"])
+# --- Title ---
+st.markdown("<h1 style='text-align:center;'>🔄 Video Flipper</h1>", unsafe_allow_html=True)
+st.markdown("<p style='text-align:center;'>A simple tool to flip your videos horizontally or vertically!</p>", unsafe_allow_html=True)
 
-    with tab1:
-        st.markdown('<div class="section-title">Select Flip Direction</div>', unsafe_allow_html=True)
-        flip_horizontal = st.checkbox("🔁 Flip Horizontal", value=True)
-        flip_vertical = st.checkbox("🔃 Flip Vertical", value=False)
+# --- File Upload Section ---
+st.markdown("## 📤 Step 1: Upload Video")
+uploaded_file = st.file_uploader(
+    "Choose a video file to flip (mp4, mov, avi, mkv):",
+    type=["mp4", "mov", "avi", "mkv"],
+    on_change=reset_state,
+    label_visibility="visible"
+)
 
-    with tab2:
-        st.markdown('<div class="section-title">Upload Your Video File</div>', unsafe_allow_html=True)
-        uploaded_file = st.file_uploader(
-            "Choose a video file to flip",
-            type=["mp4", "mov", "avi", "mkv"],
-            on_change=reset_state
-        )
+# --- Flip Options Section ---
+st.markdown("## 🎛️ Step 2: Select Flip Options")
+col1, col2 = st.columns(2)
+with col1:
+    flip_horizontal = st.checkbox("🔁 Flip Horizontally", value=True)
+with col2:
+    flip_vertical = st.checkbox("🔃 Flip Vertically", value=False)
 
-st.write("---")
+# --- Process Button ---
+if uploaded_file:
+    st.markdown("## 🚀 Step 3: Process Video")
+    st.markdown("Click the button below to flip your video based on selections.")
 
-# --- Processing Logic ---
-if uploaded_file is not None:
-    st.markdown('<div class="section-title">🚀 Ready to Process</div>', unsafe_allow_html=True)
-
-    if st.button("✨ Flip Video Now", type="primary", use_container_width=True):
+    if st.button("🚩 Flip Video Now", type="primary", use_container_width=True):
         if not flip_horizontal and not flip_vertical:
             st.error("⚠️ Please select at least one flip direction.")
         else:
@@ -83,48 +85,42 @@ if uploaded_file is not None:
             try:
                 temp_dir = tempfile.mkdtemp()
                 input_path = os.path.join(temp_dir, uploaded_file.name)
-
                 output_filename = os.path.splitext(uploaded_file.name)[0] + "_flipped.mp4"
                 output_path = os.path.join(temp_dir, output_filename)
 
                 with open(input_path, "wb") as f:
                     f.write(uploaded_file.getbuffer())
 
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                status_text.text("Initializing...")
+                progress_bar = st.progress(0, text="Processing video, please wait...")
 
+                # Build filter string
                 flip_filters = []
                 if flip_horizontal:
-                    flip_filters.append('hflip')
+                    flip_filters.append("hflip")
                 if flip_vertical:
-                    flip_filters.append('vflip')
+                    flip_filters.append("vflip")
                 flip_filter_str = ",".join(flip_filters)
 
                 cmd = [
-                    'ffmpeg', '-y',
-                    '-i', input_path,
-                    '-vf', flip_filter_str,
-                    '-c:v', 'libx264',
-                    '-crf', '18',
-                    '-preset', 'slow',
-                    '-c:a', 'copy',
-                    '-movflags', '+faststart',
+                    "ffmpeg", "-y",
+                    "-i", input_path,
+                    "-vf", flip_filter_str,
+                    "-c:v", "libx264",
+                    "-crf", "18",
+                    "-preset", "slow",
+                    "-c:a", "copy",
+                    "-movflags", "+faststart",
                     output_path
                 ]
 
-                status_text.text("🔄 Flipping video, please wait...")
-                progress_bar.progress(30)
-
                 result = subprocess.run(cmd, capture_output=True, text=True)
                 progress_bar.progress(100)
-                status_text.text("✅ Done!")
 
                 if result.returncode != 0:
-                    st.error("❌ FFmpeg Error:")
+                    st.error("❌ FFmpeg processing failed!")
                     st.code(result.stderr)
                 else:
-                    st.success("🎉 Video processed successfully!")
+                    st.success("✅ Video processed successfully!")
 
                     with open(output_path, "rb") as f:
                         video_bytes = f.read()
@@ -134,21 +130,24 @@ if uploaded_file is not None:
                     st.session_state.file_name = output_filename
 
             except Exception as e:
-                st.error(f"💥 Unexpected error: {str(e)}")
+                st.error(f"❌ Error: {str(e)}")
             finally:
                 if temp_dir and os.path.exists(temp_dir):
                     shutil.rmtree(temp_dir)
 
-# --- Display Result ---
+# --- Preview and Download Section ---
 if st.session_state.processed and st.session_state.video_bytes:
-    st.write("---")
-    st.markdown('<div class="section-title">🎬 Your Flipped Video</div>', unsafe_allow_html=True)
+    st.markdown("## 🎞️ Step 4: Preview & Download")
     st.video(st.session_state.video_bytes)
 
     st.download_button(
-        label="📥 Download Flipped Video",
+        label="⬇️ Download Your Flipped Video",
         data=st.session_state.video_bytes,
         file_name=st.session_state.file_name,
         mime="video/mp4",
         use_container_width=True
     )
+
+# --- Footer Credit ---
+st.markdown("---")
+st.markdown("<div style='text-align: center; font-size: 14px;'>✨ Made with Streamlit + FFmpeg ❤️</div>", unsafe_allow_html=True)
