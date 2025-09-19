@@ -1,18 +1,41 @@
-import os
 import streamlit as st
+import os
 import subprocess
-from base64 import b64encode
+from tempfile import NamedTemporaryFile
+from pathlib import Path
 
-# Ensure FFmpeg is available
-if not os.path.exists('/usr/bin/ffmpeg'):
-    os.system('apt-get update && apt-get install -y ffmpeg')
+# Set page config
+st.set_page_config(
+    page_title="Video Flipper",
+    page_icon="🔄",
+    layout="wide"
+)
 
-# ✅ Set paths (to be stored in Streamlit’s temporary directories)
-TEMP_INPUT_FILE = "/tmp/input_video.mp4"
-TEMP_OUTPUT_FILE = "/tmp/flipped_output.mp4"
+# App title and description
+st.title("🔄 Video Flipper")
+st.markdown("""
+Upload a video and flip it horizontally, vertically, or both!
+""")
 
-# ✅ Define flip function (horizontal/vertical/both)
-def flip_video(input_file, output_file, flip_horizontal=False, flip_vertical=False):
+# File uploader
+uploaded_file = st.file_uploader(
+    "Choose a video file", 
+    type=["mp4", "mov", "avi", "mkv"],
+    accept_multiple_files=False
+)
+
+# Flip options
+col1, col2 = st.columns(2)
+with col1:
+    flip_h = st.checkbox("Flip Horizontally", value=True)
+with col2:
+    flip_v = st.checkbox("Flip Vertically")
+
+# Process button
+process_btn = st.button("Flip Video!")
+
+def flip_video(input_path, output_path, flip_horizontal, flip_vertical):
+    """Flip video using FFmpeg"""
     flip_filters = []
     if flip_horizontal:
         flip_filters.append('hflip')
@@ -24,59 +47,61 @@ def flip_video(input_file, output_file, flip_horizontal=False, flip_vertical=Fal
     
     flip_filter_str = ",".join(flip_filters)
 
-    # Visually lossless, browser-compatible encoding
     cmd = [
         'ffmpeg', '-y',
-        '-i', input_file,
+        '-i', input_path,
         '-vf', flip_filter_str,
         '-c:v', 'libx264',
         '-crf', '17',
         '-preset', 'fast',
         '-c:a', 'aac',
         '-b:a', '192k',
-        output_file
+        output_path
     ]
 
     result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
     if result.returncode != 0:
-        st.error(f"FFmpeg Error: {result.stderr}")
-    else:
-        st.success("✅ Video processed successfully.")
+        st.error("FFmpeg Error:")
+        st.code(result.stderr)
+        return False
+    return True
 
-# ✅ Streamlit interface
-st.title("Video Flipper")
-
-st.write("Upload a video file and select the flip direction:")
-
-# Upload video
-uploaded_file = st.file_uploader("Choose a video...", type=["mp4"])
-
-# Select flip direction
-flip_horizontal = st.checkbox("Flip Horizontally")
-flip_vertical = st.checkbox("Flip Vertically")
-
-if uploaded_file is not None:
-    # Save the uploaded file to the temp directory
-    with open(TEMP_INPUT_FILE, "wb") as f:
-        f.write(uploaded_file.getbuffer())
-    
-    st.video(uploaded_file)  # Display the uploaded video
-
-    # Button to process the video
-    if st.button("Flip Video"):
-        flip_video(TEMP_INPUT_FILE, TEMP_OUTPUT_FILE, flip_horizontal, flip_vertical)
+if uploaded_file and process_btn:
+    with st.spinner("Processing your video..."):
+        # Save uploaded file to temp file
+        with NamedTemporaryFile(delete=False, suffix=Path(uploaded_file.name).suffix) as tmp:
+            tmp.write(uploaded_file.read())
+            input_path = tmp.name
         
-        # Display the flipped video
-        with open(TEMP_OUTPUT_FILE, 'rb') as f:
-            flipped_video = f.read()
-            data_url = "data:video/mp4;base64," + b64encode(flipped_video).decode()
-            st.video(data_url)  # Display the flipped video
+        # Create output file path
+        output_path = f"flipped_{uploaded_file.name}"
         
-        # Trigger download link
-        st.download_button(
-            label="Download Flipped Video",
-            data=flipped_video,
-            file_name="flipped_output.mp4",
-            mime="video/mp4"
+        # Process video
+        success = flip_video(
+            input_path=input_path,
+            output_path=output_path,
+            flip_horizontal=flip_h,
+            flip_vertical=flip_v
         )
+        
+        # Clean up input file
+        os.unlink(input_path)
+        
+        if success:
+            st.success("Video processed successfully!")
+            
+            # Display the video
+            st.video(output_path)
+            
+            # Download button
+            with open(output_path, "rb") as f:
+                st.download_button(
+                    label="Download Flipped Video",
+                    data=f,
+                    file_name=output_path,
+                    mime="video/mp4"
+                )
+            
+            # Clean up output file
+            os.unlink(output_path)
