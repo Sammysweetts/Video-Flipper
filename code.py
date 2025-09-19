@@ -3,6 +3,7 @@ import os
 import subprocess
 from tempfile import NamedTemporaryFile
 from pathlib import Path
+import ffmpeg
 
 # Set page config
 st.set_page_config(
@@ -14,7 +15,8 @@ st.set_page_config(
 # App title and description
 st.title("🔄 Video Flipper")
 st.markdown("""
-Upload a video and flip it horizontally, vertically, or both!
+Upload a video and flip it horizontally, vertically, or both!  
+This app uses pure Python implementation for video processing.
 """)
 
 # File uploader
@@ -35,47 +37,45 @@ with col2:
 process_btn = st.button("Flip Video!")
 
 def flip_video(input_path, output_path, flip_horizontal, flip_vertical):
-    """Flip video using FFmpeg"""
-    flip_filters = []
-    if flip_horizontal:
-        flip_filters.append('hflip')
-    if flip_vertical:
-        flip_filters.append('vflip')
-
-    if not flip_filters:
-        raise ValueError("You must enable at least one flip direction.")
-    
-    flip_filter_str = ",".join(flip_filters)
-
-    cmd = [
-        'ffmpeg', '-y',
-        '-i', input_path,
-        '-vf', flip_filter_str,
-        '-c:v', 'libx264',
-        '-crf', '17',
-        '-preset', 'fast',
-        '-c:a', 'aac',
-        '-b:a', '192k',
-        output_path
-    ]
-
-    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-
-    if result.returncode != 0:
-        st.error("FFmpeg Error:")
-        st.code(result.stderr)
+    """Flip video using ffmpeg-python"""
+    try:
+        stream = ffmpeg.input(input_path)
+        
+        if flip_horizontal and flip_vertical:
+            stream = stream.hflip().vflip()
+        elif flip_horizontal:
+            stream = stream.hflip()
+        elif flip_vertical:
+            stream = stream.vflip()
+        
+        stream = stream.output(
+            output_path,
+            vcodec='libx264',
+            crf=17,
+            preset='fast',
+            acodec='aac',
+            audio_bitrate='192k'
+        )
+        
+        ffmpeg.run(stream, overwrite_output=True, quiet=True)
+        return True
+    except ffmpeg.Error as e:
+        st.error(f"Video processing failed: {e.stderr.decode('utf-8')}")
         return False
-    return True
+    except Exception as e:
+        st.error(f"An error occurred: {str(e)}")
+        return False
 
 if uploaded_file and process_btn:
     with st.spinner("Processing your video..."):
         # Save uploaded file to temp file
-        with NamedTemporaryFile(delete=False, suffix=Path(uploaded_file.name).suffix) as tmp:
-            tmp.write(uploaded_file.read())
-            input_path = tmp.name
+        with NamedTemporaryFile(delete=False, suffix=Path(uploaded_file.name).suffix) as tmp_input:
+            tmp_input.write(uploaded_file.read())
+            input_path = tmp_input.name
         
         # Create output file path
-        output_path = f"flipped_{uploaded_file.name}"
+        output_filename = f"flipped_{Path(uploaded_file.name).stem}.mp4"
+        output_path = os.path.join("/tmp", output_filename)
         
         # Process video
         success = flip_video(
@@ -86,10 +86,13 @@ if uploaded_file and process_btn:
         )
         
         # Clean up input file
-        os.unlink(input_path)
+        try:
+            os.unlink(input_path)
+        except:
+            pass
         
         if success:
-            st.success("Video processed successfully!")
+            st.success("✅ Video processed successfully!")
             
             # Display the video
             st.video(output_path)
@@ -97,11 +100,16 @@ if uploaded_file and process_btn:
             # Download button
             with open(output_path, "rb") as f:
                 st.download_button(
-                    label="Download Flipped Video",
+                    label="⬇️ Download Flipped Video",
                     data=f,
-                    file_name=output_path,
+                    file_name=output_filename,
                     mime="video/mp4"
                 )
             
             # Clean up output file
-            os.unlink(output_path)
+            try:
+                os.unlink(output_path)
+            except:
+                pass
+        else:
+            st.error("❌ Failed to process video. Please try again.")
