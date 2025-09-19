@@ -1,8 +1,11 @@
-import streamlit as st
 import os
+import streamlit as st
 import subprocess
 from base64 import b64encode
-import time
+
+# Ensure FFmpeg is available
+if not os.path.exists('/usr/bin/ffmpeg'):
+    os.system('apt-get update && apt-get install -y ffmpeg')
 
 # ✅ Set paths (to be stored in Streamlit’s temporary directories)
 TEMP_INPUT_FILE = "/tmp/input_video.mp4"
